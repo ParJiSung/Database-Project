@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Menu</h1>
+<table border="1" cellpadding="6" cellspacing="0">
+  <tr><th>Pizza</th><th>Price</th><th>Veg</th><th>Vegan</th></tr>
+  {% for r in rows %}
+    <tr>
+      <td>{{ r.pizza_name }}</td>
+      <td>€ {{ '%.2f'|format(r.price) }}</td>
+      <td>{{ '✔' if r.is_vegetarian else '' }}</td>
+      <td>{{ '✔' if r.is_vegan else '' }}</td>
+    </tr>
+  {% endfor %}
+</table>
+{% endblock %}
