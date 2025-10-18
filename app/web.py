@@ -110,7 +110,6 @@ def ui_order_form():
 
 @bp.post("/ui/order")
 def ui_order_submit():
-    # helper: supports both checkbox lists and "1,2,3" strings
     def parse_multi(name: str):
         vals = request.form.getlist(name)
         if len(vals) == 1 and ',' in vals[0]:
@@ -120,56 +119,33 @@ def ui_order_submit():
     current_app.logger.info("POST /ui/order form=%s", dict(request.form))
 
     mode = request.form.get("mode", "existing")
-    discount_code_raw = request.form.get("discount_code")
-    try:
-        discount_code = int(discount_code_raw) if discount_code_raw else None
-    except ValueError:
-        discount_code = None  # ignore bad input
+    code_raw = request.form.get("discount_code")
+    try: discount_code = int(code_raw) if code_raw else None
+    except ValueError: discount_code = None
 
-    # create/select customer first
     with db.SessionLocal() as s, s.begin():
         if mode == "new":
             new_id = s.execute(text("SELECT COALESCE(MAX(idCustomer),0)+1 FROM customer")).scalar_one()
-
-            first = (request.form.get("new_first_name") or "").strip()
-            last  = (request.form.get("new_last_name")  or "").strip()
-
-            # optional fallback: split "new_name" if first/last missing
-            if (not first or not last) and request.form.get("new_name"):
-                parts = request.form.get("new_name").strip().split()
-                if len(parts) >= 2:
-                    first = first or parts[0]
-                    last  = last  or " ".join(parts[1:])
-                elif len(parts) == 1:
-                    first = first or parts[0]
-                    last  = last or "(unknown)"
-
-            if not first: first = "(unknown)"
-            if not last:  last  = "(unknown)"
-
-            payload = {
-                "id": new_id,
-                "first": first,
-                "last":  last,
-                "bd": request.form["new_birthdate"],
-                "pc": request.form["new_postcode"],
-                "ct": request.form["new_city"],
-                "st": request.form["new_street"],
-                "nr": request.form["new_number"],
-            }
-
+            first = (request.form.get("new_first_name") or "").strip() or "(unknown)"
+            last  = (request.form.get("new_last_name")  or "").strip() or "(unknown)"
             s.execute(text("""
                 INSERT INTO customer
                   (idCustomer, first_name, last_name, birthdate, postcode, city, street, `number`, createdat)
                 VALUES
                   (:id, :first, :last, :bd, :pc, :ct, :st, :nr, CURDATE())
-            """), payload)
-
+            """), {
+                "id": new_id,
+                "first": first, "last": last,
+                "bd": request.form["new_birthdate"],
+                "pc": request.form["new_postcode"],
+                "ct": request.form["new_city"],
+                "st": request.form["new_street"],
+                "nr": request.form["new_number"],
+            })
             customer_id = new_id
         else:
             customer_id = int(request.form["customer_id"])
 
-    # collect items
     pizzas = []
     for pid in parse_multi("pizzas"):
         qty = int(request.form.get(f"qty_p_{pid}", "0") or 0)
@@ -182,17 +158,13 @@ def ui_order_submit():
         if qty > 0:
             products.append({"id": int(pr), "qty": qty})
 
-    payload = {
-        "customer_id": customer_id,
-        "pizzas": pizzas,
-        "products": products,
-        "discount_code": discount_code
-    }
+    payload = {"customer_id": customer_id, "pizzas": pizzas, "products": products, "discount_code": discount_code}
     current_app.logger.info("ORDER PAYLOAD -> %s", json.dumps(payload))
 
+    # MUST exist in app/services/orders.py
     result = orders_service.place_order(payload)
-    return render_template("receipt.html", res=result, payload=payload)
 
+    return render_template("receipt.html", res=result, payload=payload)
 
 @bp.get("/ui/reports")
 def ui_reports():

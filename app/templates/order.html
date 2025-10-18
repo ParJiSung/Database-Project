@@ -118,13 +118,41 @@
   const modeNew = document.getElementById('mode_new');
   const existingBlock = document.getElementById('existing_block');
   const newBlock = document.getElementById('new_block');
+
+  // all inputs that belong to the "new customer" section
+  const newInputs = Array.from(newBlock.querySelectorAll('input, select, textarea'));
+
+  function setDisabled(elms, disabled) {
+    for (const el of elms) {
+      el.disabled = disabled;
+      // only enforce "required" when enabled
+      if (disabled) {
+        el.dataset.wasRequired = el.required ? "1" : "";
+        el.required = false;
+      } else {
+        if (el.dataset.wasRequired === "1") el.required = true;
+      }
+    }
+  }
+
   function sync() {
     const isNew = modeNew.checked;
     existingBlock.style.display = isNew ? 'none' : '';
     newBlock.style.display = isNew ? '' : 'none';
+    setDisabled(newInputs, !isNew);
   }
+
   modeExisting.addEventListener('change', sync);
   modeNew.addEventListener('change', sync);
+  // run once on page load
   sync();
+
+  // optional: quick visual clue if submit is being blocked by the browser
+  document.querySelector('form').addEventListener('submit', (e) => {
+    // if the form is invalid, the browser will preventDefault before this fires,
+    // so this is mostly for debugging / comfort.
+    console.debug('Submitting order form…');
+  });
 </script>
+
 {% endblock %}
