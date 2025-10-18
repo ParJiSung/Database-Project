@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>Order Result</h2>
+
+{% set ok = res.get('ok') %}
+{% if ok %}
+  <div class="alert alert-success">
+    Order #{{ res.get('order_id','—') }}
+    {% if res.get('driver_id') %} assigned to driver {{ res.get('driver_id') }}{% endif %}
+  </div>
+
+  {% if res.get('subtotal') is not none %}
+    <p><b>Subtotal:</b> € {{ '%.2f'|format((res.get('subtotal') or 0)|float) }}</p>
+  {% endif %}
+
+  {% set discounts = res.get('discounts', []) %}
+  {% if discounts and discounts|length %}
+    <h5>Discounts</h5>
+    <ul>
+      {% for d in discounts %}
+        <li>
+          {{ d.get('type','discount') }}
+          {% if d.get('amount') is not none %}- € {{ '%.2f'|format((d.get('amount') or 0)|float) }}{% endif %}
+          {% if d.get('reason') %} ({{ d.get('reason') }}){% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  <p><b>Total:</b> € {{ '%.2f'|format((res.get('total') or 0)|float) }}</p>
+
+  {% if res.get('assigned_at') %}
+    <p class="text-muted">Assigned at: {{ res.get('assigned_at') }}</p>
+  {% endif %}
+{% else %}
+  <div class="alert alert-danger">
+    Order failed{% if res.get('msg') %}: {{ res.get('msg') }}{% endif %}
+  </div>
+{% endif %}
+
+<hr>
+<h5 class="mt-3">Debug payload</h5>
+<pre style="white-space:pre-wrap">{{ payload | tojson(indent=2) }}</pre>
+
+<p><a class="btn btn-outline-primary mt-2" href="{{ url_for('web.ui_order_form') }}">Place another</a></p>
+{% endblock %}

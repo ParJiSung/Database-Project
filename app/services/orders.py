@@ -1,156 +1,169 @@
+# app/services/orders.py
+from decimal import Decimal
 from sqlalchemy import text
 from .. import db
-from .pricing import price_for_pizza
-from .discounts import is_birthday, pizzas_bought_total, redeem_one_time_code
-from datetime import date
 
-def place(payload: dict):
+def _to_float(x):
+    if isinstance(x, Decimal):
+        return float(x)
+    return float(x) if x is not None else 0.0
+
+def place_order(payload: dict) -> dict:
     """
     payload = {
-      "customer_id": 1,
-      "pizzas":   [{"id":1,"qty":1}, {"id":4,"qty":2}],
-      "products": [{"id":3,"qty":1}],          # optional
-      "discount_code": 1234                    # optional
+      "customer_id": int,
+      "pizzas":   [{"id": int, "qty": int}, ...],   # pizza ids from pizza.idPizza
+      "products": [{"id": int, "qty": int}, ...],   # product ids from product.idproduct
+      "discount_code": Optional[int]
     }
+    Returns { ok, order_id, driver_id, subtotal, discounts[], total }
     """
-    if not payload.get("pizzas"):
-        return {"ok": False, "msg": "At least one pizza required"}
+    cust_id = int(payload["customer_id"])
+    pizzas  = payload.get("pizzas", []) or []
+    prods   = payload.get("products", []) or []
+    disc    = payload.get("discount_code")
 
-    try:
-        with db.SessionLocal() as s, s.begin():
-            # 1) load customer
-            cust = s.execute(
-                text("SELECT * FROM customer WHERE idCustomer=:c"),
-                {"c": payload["customer_id"]},
-            ).mappings().first()
-            if not cust:
-                return {"ok": False, "msg": f"Customer {payload['customer_id']} not found"}
+    if not pizzas:
+        return {"ok": False, "msg": "Order must include at least one pizza."}
 
-            # 2) driver (simple: by postcode; fallback to lowest id)
-            drv = s.execute(
-                text("""
-                    SELECT e.idEmployee
-                    FROM employee e
-                    JOIN delivery_area da ON da.idemployee = e.idEmployee
-                    WHERE da.postal_code = :pc
-                    ORDER BY e.idEmployee
-                    LIMIT 1
-                """),
-                {"pc": cust["postcode"]},
-            ).scalar()
-            if drv is None:
-                drv = s.execute(text("SELECT MIN(idEmployee) FROM employee")).scalar()
-            if drv is None:
-                return {"ok": False, "msg": "No delivery employees in DB"}
+    with db.SessionLocal() as s, s.begin():
+        # --- 1) fetch customer address to store on order row (helps reporting) ---
+        c = s.execute(text("""
+            SELECT postcode, city, street, `number`
+            FROM customer WHERE idCustomer = :cid
+        """), {"cid": cust_id}).mappings().first()
+        if not c:
+            return {"ok": False, "msg": f"Customer {cust_id} not found."}
 
-            # 3) new order id (schema not auto-inc)
-            oid = s.execute(text("SELECT COALESCE(MAX(idorder),1000)+1 FROM orders")).scalar_one()
+        # --- 2) price lookups ----------------------------------------------------
+        # pizzas via v_pizza_price
+        pizza_ids = [p["id"] for p in pizzas]
+        price_map_pizza = {}
+        rows = s.execute(text("""
+            SELECT idPizza, price
+            FROM v_pizza_price
+            WHERE idPizza IN :ids
+        """), {"ids": tuple(pizza_ids)}).mappings().all()
+        for r in rows: price_map_pizza[r["idPizza"]] = _to_float(r["price"])
 
-            # 4) order header
-            s.execute(
-                text("""
-                    INSERT INTO orders
-                      (idorder, idcustomer, idemployee, street, city, number,
-                       status, order_time, assignedat)
-                    VALUES
-                      (:o, :c, :e, :st, :ct, :nr,
-                       'assigned',
-                       DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'),
-                       DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
-                """),
-                {
-                    "o": oid,
-                    "c": cust["idCustomer"],
-                    "e": drv,
-                    "st": cust["street"],
-                    "ct": cust["city"],
-                    "nr": cust["number"],
-                },
-            )
+        # products via product table
+        prod_ids = [p["id"] for p in prods] if prods else []
+        price_map_prod = {}
+        if prod_ids:
+            rows = s.execute(text("""
+                SELECT idproduct, price
+                FROM product
+                WHERE idproduct IN :ids
+            """), {"ids": tuple(prod_ids)}).mappings().all()
+            for r in rows: price_map_prod[r["idproduct"]] = _to_float(r["price"])
 
-            # 5) lines + subtotal using price view
-            subtotal = 0.0
-            line_prices = []  # keep for "cheapest pizza" calc
-            for it in payload["pizzas"]:
-                # ensure pizza exists
-                exists = s.execute(
-                    text("SELECT 1 FROM pizza WHERE idPizza=:p"), {"p": it["id"]}
-                ).scalar()
-                if not exists:
-                    raise ValueError(f"Pizza id {it['id']} not found")
+        # --- 3) compute line totals ---------------------------------------------
+        line_total_pizzas = 0.0
+        for p in pizzas:
+            pid, qty = int(p["id"]), int(p["qty"])
+            price = price_map_pizza.get(pid)
+            if price is None:
+                return {"ok": False, "msg": f"Pizza {pid} has no price."}
+            line_total_pizzas += price * qty
 
-                s.execute(
-                    text("INSERT INTO order_pizza (idorder, idpizza, quantity) VALUES (:o,:p,:q)"),
-                    {"o": oid, "p": it["id"], "q": it["qty"]},
-                )
-                unit = s.execute(
-                    text("SELECT price FROM v_pizza_price WHERE idPizza=:p"),
-                    {"p": it["id"]},
-                ).scalar_one()
-                unit = float(unit)
-                qty  = int(it["qty"])
-                subtotal += unit * qty
-                line_prices.extend([unit] * qty)  # expand for accurate “cheapest one” on birthday
+        line_total_products = 0.0
+        for p in prods:
+            pid, qty = int(p["id"]), int(p["qty"])
+            price = price_map_prod.get(pid, 0.0)
+            line_total_products += price * qty
 
-            for it in payload.get("products", []):
-                s.execute(
-                    text("INSERT INTO order_product (idorder, idproduct, quantity) VALUES (:o,:p,:q)"),
-                    {"o": oid, "p": it["id"], "q": it["qty"]},
-                )
+        subtotal = line_total_pizzas + line_total_products
 
-            # 6) discounts
-            total = subtotal
-            discounts_applied = []
+        # --- 4) create new order id ---------------------------------------------
+        order_id = s.execute(text("SELECT COALESCE(MAX(idorder),1000)+1 FROM orders")).scalar_one()
 
-            # Loyalty: 10% off after 10 pizzas lifetime
-            pizzas_done = pizzas_bought_total(cust["idCustomer"])
-            if pizzas_done >= 10:
-                old = total
-                total *= 0.9
-                discounts_applied.append({"type": "loyalty_10_after_10", "amount": round(old - total, 2)})
+        # --- 5) insert order (idemployee NULL; DB trigger/proc will assign) -----
+        s.execute(text("""
+            INSERT INTO orders
+              (idorder, idcustomer, idemployee, order_time, status,
+               street, city, `number`, assignedat, deliveredat, cancelledat)
+            VALUES
+              (:id, :cid, NULL, NOW(), 'pending',
+               :st, :ct, :nr, NULL, NULL, NULL)
+        """), {
+            "id": order_id, "cid": cust_id,
+            "st": c["street"], "ct": c["city"], "nr": c["number"]
+        })
 
-            # Birthday: free cheapest pizza (+ optional free drink)
-            if is_birthday(cust["idCustomer"]) and line_prices:
-                cheapest = min(line_prices)
-                total -= cheapest
-                discounts_applied.append({"type": "birthday_free_cheapest_pizza", "amount": round(cheapest, 2)})
+        # --- 6) insert line items -----------------------------------------------
+        for p in pizzas:
+            s.execute(text("""
+                INSERT INTO order_pizza (idorder, idpizza, quantity)
+                VALUES (:o, :p, :q)
+            """), {"o": order_id, "p": int(p["id"]), "q": int(p["qty"])})
 
-                # Optional: if any product present, free drink (flat €2.50 demo)
-                if payload.get("products"):
-                    total -= 2.50
-                    discounts_applied.append({"type": "birthday_free_drink", "amount": 2.50})
+        for p in prods:
+            s.execute(text("""
+                INSERT INTO order_product (idorder, idproduct, quantity)
+                VALUES (:o, :p, :q)
+            """), {"o": order_id, "p": int(p["id"]), "q": int(p["qty"])})
 
-            # One-time discount code
-            code = payload.get("discount_code")
-            if code is not None:
-                res = redeem_one_time_code(code, cust["idCustomer"])
-                if res.get("ok"):
-                    row = res["data"]
-                    # percent then fixed
-                    if row.get("percent"):
-                        before = total
-                        total *= (1 - row["percent"] / 100.0)
-                        discounts_applied.append(
-                            {"type": f"code_percent_{row['percent']}", "amount": round(before - total, 2)}
-                        )
-                    if row.get("fixed_discount"):
-                        total -= float(row["fixed_discount"])
-                        discounts_applied.append({"type": "code_fixed", "amount": float(row["fixed_discount"])})
-                else:
-                    # don’t fail the whole order; just report the reason
-                    discounts_applied.append({"type": "code_rejected", "reason": res.get("msg", "invalid")})
+        # --- 7) apply discount code (percent + optional free item) --------------
+        discounts = []
+        total = subtotal
 
-            if total < 0:
-                total = 0.0
+        if disc is not None:
+            d = s.execute(text("""
+                SELECT discount_code, percent, free_product, free_pizza, is_redeemed
+                FROM discount WHERE discount_code = :code
+                FOR UPDATE
+            """), {"code": int(disc)}).mappings().first()
 
-            return {
-                "ok": True,
-                "order_id": oid,
-                "driver_id": drv,
-                "subtotal": round(subtotal, 2),
-                "total": round(total, 2),
-                "discounts": discounts_applied,
-            }
+            if d and not d["is_redeemed"]:
+                # percent off
+                pct = int(d["percent"] or 0)
+                if pct > 0:
+                    amt = round(total * (pct/100.0), 2)
+                    total -= amt
+                    discounts.append({"type": f"{pct}% off", "amount": amt})
 
-    except Exception as e:
-        return {"ok": False, "msg": f"order failed: {e}"}
+                # free pizza (one cheapest matching in order)
+                if d["free_pizza"]:
+                    pid = int(d["free_pizza"])
+                    # find its unit price from map and see if present
+                    unit = price_map_pizza.get(pid)
+                    if unit and any(x["id"] == pid and x["qty"] > 0 for x in pizzas):
+                        total -= unit
+                        discounts.append({"type": "free pizza", "amount": unit, "reason": f"id {pid}"})
+
+                # free product
+                if d["free_product"]:
+                    prid = int(d["free_product"])
+                    unit = price_map_prod.get(prid)
+                    if unit and any(x["id"] == prid and x["qty"] > 0 for x in prods):
+                        total -= unit
+                        discounts.append({"type": "free product", "amount": unit, "reason": f"id {prid}"})
+
+                # mark redeemed
+                s.execute(text("""
+                    UPDATE discount
+                       SET is_redeemed = 1, reedemedby = :cust
+                     WHERE discount_code = :code
+                """), {"cust": cust_id, "code": int(disc)})
+            else:
+                discounts.append({"type": "invalid_or_used_code", "amount": 0.0})
+
+        # Never go negative
+        if total < 0:
+            total = 0.0
+
+        # --- 8) driver assignment is DB-side (trigger/procedure); read it back --
+        drv = s.execute(text("""
+            SELECT idemployee FROM orders WHERE idorder = :o
+        """), {"o": order_id}).scalar_one_or_none()
+
+        # Build result; cast to float for templates/JSON
+        result = {
+            "ok": True,
+            "order_id": order_id,
+            "driver_id": drv,
+            "subtotal": round(float(subtotal), 2),
+            "discounts": discounts,
+            "total": round(float(total), 2),
+        }
+        return result

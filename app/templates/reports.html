@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>Reports</h2>
+
+<!-- Undelivered orders -->
+<h4 class="mt-4">Undelivered (pending/assigned)</h4>
+<table class="table table-sm">
+  <thead>
+    <tr>
+      <th>Order #</th>
+      <th>Time</th>
+      <th>Status</th>
+      <th>Customer</th>
+      <th>Postcode</th>
+      <th>Address</th>
+      <th>Driver</th>
+      <th>Assigned</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in undel %}
+    <tr>
+      <td>{{ r.get('idorder') }}</td>
+      <td>{{ r.get('order_time') }}</td>
+      <td>{{ r.get('status') }}</td>
+      <td>{{ r.get('customer_name') or (r.get('idcustomer') ~ '') }}</td>
+      <td>{{ r.get('postcode') }}</td>
+      <td>{{ r.get('street') }} {{ r.get('number') }}, {{ r.get('city') }}</td>
+      <td>{{ r.get('idemployee') or '—' }}</td>
+      <td>{{ r.get('assignedat') or '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="text-muted">No undelivered orders 🎉</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- Top pizzas last month -->
+<h4 class="mt-4">Top 3 pizzas (last 30 days)</h4>
+<table class="table table-sm">
+  <thead><tr><th>Pizza</th><th>Qty</th></tr></thead>
+  <tbody>
+    {% for r in top3 %}
+      <tr><td>{{ r.get('pizza_name') }}</td><td>{{ r.get('qty') }}</td></tr>
+    {% else %}
+      <tr><td colspan="2" class="text-muted">No sales data</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- Earnings -->
+<h4 class="mt-4">Earnings by postcode / age group</h4>
+<table class="table table-sm">
+  <thead>
+    <tr>
+      <th>Bucket</th>
+      <th>Pizza €</th>
+      <th>Products €</th>
+      <th>Total €</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in earn %}
+    <tr>
+      <td>{{ r.get('group_key') }}</td>
+      <td>€ {{ '%.2f'|format((r.get('pizza_amount') or 0)|float) }}</td>
+      <td>€ {{ '%.2f'|format((r.get('product_amount') or 0)|float) }}</td>
+      <td><b>€ {{ '%.2f'|format((r.get('total_amount') or 0)|float) }}</b></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="text-muted">No earnings data</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- Top products last month -->
+<h4 class="mt-4">Top products (last 30 days)</h4>
+<table class="table table-sm">
+  <thead><tr><th>Product</th><th>Qty</th></tr></thead>
+  <tbody>
+    {% for r in top_products %}
+      <tr><td>{{ r.get('name') }}</td><td>{{ r.get('qty') }}</td></tr>
+    {% else %}
+      <tr><td colspan="2" class="text-muted">No product sales</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

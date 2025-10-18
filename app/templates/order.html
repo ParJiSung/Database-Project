@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block body %}
+<h2>Place Order</h2>
+
+<form method="post" action="{{ url_for('web.ui_order_submit') }}" class="row g-3">
+
+  <!-- pick existing OR create new -->
+  <div class="col-12">
+    <div class="form-check form-check-inline">
+      <input class="form-check-input" type="radio" name="mode" id="mode_existing" value="existing" checked>
+      <label class="form-check-label" for="mode_existing">Existing customer</label>
+    </div>
+    <div class="form-check form-check-inline">
+      <input class="form-check-input" type="radio" name="mode" id="mode_new" value="new">
+      <label class="form-check-label" for="mode_new">I’m new</label>
+    </div>
+  </div>
+
+  <!-- existing -->
+  <div class="col-12 col-md-4" id="existing_block">
+    <label class="form-label">Customer ID</label>
+    <select name="customer_id" class="form-select">
+      {% for c in customers %}
+        <option value="{{ c.idCustomer }}">Customer #{{ c.idCustomer }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- new -->
+  <div class="col-12" id="new_block" style="display:none;">
+    <div class="row g-3">
+      <div class="col-md-3">
+        <label class="form-label">First name</label>
+        <input name="new_first_name" class="form-control" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Last name</label>
+        <input name="new_last_name" class="form-control" required>
+      </div>
+
+      <!-- Kept for backwards compat; we’ll split it if first/last missing -->
+      <div class="col-md-6">
+        <label class="form-label">Full name (optional fallback)</label>
+        <input name="new_name" class="form-control" placeholder="Only used if first/last missing">
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label">Birthdate</label>
+        <input type="date" name="new_birthdate" class="form-control" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label">Street</label>
+        <input name="new_street" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Number</label>
+        <input name="new_number" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">City</label>
+        <input name="new_city" class="form-control" required>
+      </div>
+      <div class="col-md-2">
+        <label class="form-label">Postcode</label>
+        <input name="new_postcode" class="form-control" required placeholder="e.g. 6211 LE">
+        <div class="form-text">Use a postcode covered by a driver for auto-assignment.</div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="mt-4"/>
+
+  <div class="col-12">
+    <h5 class="mt-2">Pizzas</h5>
+    <table class="table table-sm">
+      <thead><tr><th></th><th>Pizza</th><th>Price</th><th>Qty</th></tr></thead>
+      <tbody>
+        {% for p in pizzas %}
+        <tr>
+          <td><input type="checkbox" name="pizzas" value="{{ p.idPizza }}"></td>
+          <td>{{ p.pizza_name }}</td>
+          <td>€ {{ '%.2f'|format(p.price|float) }}</td>
+          <td style="width:120px;"><input type="number" min="0" value="1" name="qty_p_{{ p.idPizza }}" class="form-control"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col-12">
+    <h5 class="mt-2">Products</h5>
+    <table class="table table-sm">
+      <thead><tr><th></th><th>Name</th><th>Qty</th></tr></thead>
+      <tbody>
+        {% for pr in products %}
+        <tr>
+          <td><input type="checkbox" name="products" value="{{ pr.idproduct }}"></td>
+          <td>{{ pr.name or ('Product #' ~ pr.idproduct) }}</td>
+          <td style="width:120px;"><input type="number" min="0" value="1" name="qty_prod_{{ pr.idproduct }}" class="form-control"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col-12 col-md-3">
+    <label class="form-label">Discount code (optional)</label>
+    <input name="discount_code" class="form-control" placeholder="e.g. 5678">
+  </div>
+
+  <div class="col-12">
+    <button class="btn btn-primary">Submit Order</button>
+  </div>
+</form>
+
+<script>
+  const modeExisting = document.getElementById('mode_existing');
+  const modeNew = document.getElementById('mode_new');
+  const existingBlock = document.getElementById('existing_block');
+  const newBlock = document.getElementById('new_block');
+  function sync() {
+    const isNew = modeNew.checked;
+    existingBlock.style.display = isNew ? 'none' : '';
+    newBlock.style.display = isNew ? '' : 'none';
+  }
+  modeExisting.addEventListener('change', sync);
+  modeNew.addEventListener('change', sync);
+  sync();
+</script>
+{% endblock %}
