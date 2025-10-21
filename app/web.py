@@ -110,7 +110,7 @@ def ui_order_form():
 
 @bp.post("/ui/order")
 def ui_order_submit():
-    def parse_multi(name: str):
+    def parse_multi(name):
         vals = request.form.getlist(name)
         if len(vals) == 1 and ',' in vals[0]:
             vals = [v.strip() for v in vals[0].split(',') if v.strip()]
@@ -160,8 +160,6 @@ def ui_order_submit():
 
     payload = {"customer_id": customer_id, "pizzas": pizzas, "products": products, "discount_code": discount_code}
     current_app.logger.info("ORDER PAYLOAD -> %s", json.dumps(payload))
-
-    # MUST exist in app/services/orders.py
     result = orders_service.place_order(payload)
 
     return render_template("receipt.html", res=result, payload=payload)

@@ -6,10 +6,10 @@ def _to_f(x):
     return float(x) if isinstance(x, Decimal) else float(x or 0)
 
 def place_order(payload: dict) -> dict:
-    cid = int(payload["customer_id"])
+    customer_id = int(payload["customer_id"])
     pizzas = payload.get("pizzas", [])
-    prods  = payload.get("products", [])
-    code   = payload.get("discount_code")
+    products  = payload.get("products", [])
+    dis_code   = payload.get("discount_code")
 
     if not pizzas:
         return {"ok": False, "msg": "Order must contain at least one pizza."}
@@ -25,26 +25,26 @@ def place_order(payload: dict) -> dict:
 
         subtotal = 0.0
         for p in pizzas:
-            pid, q = int(p["id"]), int(p["qty"])
-            if pid not in price_map:
-                raise RuntimeError(f"Unknown pizza id {pid} for pricing.")
-            subtotal += price_map[pid] * q
+            pizza_id, quantity = int(p["id"]), int(p["qty"])
+            if pizza_id not in price_map:
+                raise RuntimeError(f"Unknown pizza id {pizza_id} for pricing.")
+            subtotal += price_map[pizza_id] * quantity
 
         # product prices
         prod_sub = 0.0
         prod_map = {}
-        if prods:
-            prod_ids = tuple({pr["id"] for pr in prods})
+        if products:
+            prod_ids = tuple({pr["id"] for pr in products})
             rows = s.execute(
                 text("SELECT idproduct, price FROM product WHERE idproduct IN :ids"),
                 {"ids": prod_ids},
             ).all()
             prod_map = {int(r[0]): _to_f(r[1]) for r in rows}
-            for pr in prods:
-                prid, q = int(pr["id"]), int(pr["qty"])
+            for pr in products:
+                prid, quantity = int(pr["id"]), int(pr["qty"])
                 if prid not in prod_map:
                     raise RuntimeError(f"Unknown product id {prid} for pricing.")
-                prod_sub += prod_map[prid] * q
+                prod_sub += prod_map[prid] * quantity
 
         subtotal += prod_sub
         discounts = []
@@ -52,7 +52,7 @@ def place_order(payload: dict) -> dict:
 
         # PRE-CHECK discount but do not mark redeemed yet
         discount_row = None
-        if code is not None:
+        if dis_code is not None:
             discount_row = s.execute(
                 text("""
                     SELECT discount_code, percent, free_product, free_pizza, is_redeemed, reedemedby
@@ -60,7 +60,7 @@ def place_order(payload: dict) -> dict:
                     WHERE discount_code = :c
                     FOR UPDATE
                 """),
-                {"c": int(code)}
+                {"c": int(dis_code)}
             ).mappings().first()
 
             if not discount_row:
@@ -68,44 +68,44 @@ def place_order(payload: dict) -> dict:
             elif int(discount_row["is_redeemed"]) == 1:
                 discounts.append({"type": "invalid_or_used_code", "amount": 0.0, "reason": "already redeemed"})
             else:
-                pct = int(discount_row["percent"] or 0)
-                if pct > 0:
-                    amt = round(total * (pct / 100.0), 2)
-                    total -= amt
-                    discounts.append({"type": f"{pct}% off", "amount": amt})
+                prct = int(discount_row["percent"] or 0)
+                if prct > 0:
+                    amount = round(total * (prct / 100.0), 2)
+                    total -= amount
+                    discounts.append({"type": f"{prct}% off", "amount": amount})
 
-                fp = discount_row["free_pizza"]
-                if fp:
-                    fp = int(fp)
-                    in_cart = next((p for p in pizzas if int(p["id"]) == fp and int(p["qty"]) > 0), None)
-                    if in_cart and fp in price_map:
-                        amt = price_map[fp]
-                        total -= amt
-                        discounts.append({"type": "free_pizza", "amount": amt, "reason": f"idPizza={fp}"})
+                free_pizza = discount_row["free_pizza"]
+                if free_pizza:
+                    free_pizza = int(free_pizza)
+                    in_cart = next((p for p in pizzas if int(p["id"]) == free_pizza and int(p["qty"]) > 0), None)
+                    if in_cart and free_pizza in price_map:
+                        amount = price_map[free_pizza]
+                        total -= amount
+                        discounts.append({"type": "free_pizza", "amount": amount, "reason": f"idPizza={free_pizza}"})
 
-                fpr = discount_row["free_product"]
-                if fpr:
-                    fpr = int(fpr)
-                    in_cart = next((p for p in prods if int(p["id"]) == fpr and int(p["qty"]) > 0), None)
+                free_product = discount_row["free_product"]
+                if free_product:
+                    free_product = int(free_product)
+                    in_cart = next((p for p in products if int(p["id"]) == free_product and int(p["qty"]) > 0), None)
                     if in_cart:
-                        pr_price = prod_map.get(fpr)
+                        pr_price = prod_map.get(free_product)
                         if pr_price is None:
                             pr_price = s.execute(
                                 text("SELECT price FROM product WHERE idproduct=:pid"),
-                                {"pid": fpr}
+                                {"pid": free_product}
                             ).scalar()
                             pr_price = _to_f(pr_price) if pr_price is not None else 0.0
-                        amt = pr_price
-                        total -= amt
-                        discounts.append({"type": "free_product", "amount": amt, "reason": f"idproduct={fpr}"})
+                        amount = pr_price
+                        total -= amount
+                        discounts.append({"type": "free_product", "amount": amount, "reason": f"idproduct={free_product}"})
 
         # find customer + driver
-        cust = s.execute(
+        customer = s.execute(
             text("SELECT postcode, street, city, `number` FROM customer WHERE idCustomer=:id"),
-            {"id": cid}
+            {"id": customer_id}
         ).mappings().one()
 
-        pc = (cust["postcode"] or "").replace(" ", "")
+        postcode = (customer["postcode"] or "").replace(" ", "")
         driver = s.execute(text("""
             SELECT e.idEmployee
             FROM employee e
@@ -113,10 +113,9 @@ def place_order(payload: dict) -> dict:
             WHERE REPLACE(da.postal_code,' ','') = :pc
             ORDER BY e.idEmployee
             LIMIT 1
-        """), {"pc": pc}).scalar()
+        """), {"pc": postcode}).scalar()
 
         if driver is None:
-            # try district
             driver = s.execute(text("""
                 SELECT e.idEmployee
                 FROM employee e
@@ -124,24 +123,21 @@ def place_order(payload: dict) -> dict:
                 WHERE LEFT(REPLACE(da.postal_code,' ',''),4) = :d
                 ORDER BY e.idEmployee
                 LIMIT 1
-            """), {"d": pc[:4]}).scalar()
+            """), {"d": postcode[:4]}).scalar()
 
         if driver is None:
-            # last-resort demo fallback
             driver = s.execute(text("SELECT idEmployee FROM employee ORDER BY idEmployee LIMIT 1")).scalar()
 
         if driver is None:
-            raise RuntimeError(f"No driver covers postcode {cust['postcode']}")
-
-        # create order + lines
+            raise RuntimeError(f"No driver covers postcode {customer['postcode']}")
         new_oid = s.execute(text("SELECT COALESCE(MAX(idorder), 1000) + 1 FROM orders")).scalar_one()
 
         s.execute(text("""
             INSERT INTO orders (idorder, idcustomer, idemployee, status, street, city, `number`, assignedat)
             VALUES (:oid, :cid, :eid, 'assigned', :st, :ct, :nr, NOW())
         """), {
-            "oid": new_oid, "cid": cid, "eid": int(driver),
-            "st": cust["street"], "ct": cust["city"], "nr": cust["number"],
+            "oid": new_oid, "cid": customer_id, "eid": int(driver),
+            "st": customer["street"], "ct": customer["city"], "nr": customer["number"],
         })
 
         for p in pizzas:
@@ -150,19 +146,19 @@ def place_order(payload: dict) -> dict:
                 VALUES (:oid, :pid, :q)
             """), {"oid": new_oid, "pid": int(p["id"]), "q": int(p["qty"])})
 
-        for pr in prods:
+        for pr in products:
             s.execute(text("""
                 INSERT INTO order_product (idorder, idproduct, quantity)
                 VALUES (:oid, :pid, :q)
             """), {"oid": new_oid, "pid": int(pr["id"]), "q": int(pr["qty"])})
 
         # NOW safely mark the code as redeemed (only if it was valid & applied)
-        if code is not None and discount_row and int(discount_row["is_redeemed"]) == 0:
+        if dis_code is not None and discount_row and int(discount_row["is_redeemed"]) == 0:
             s.execute(text("""
                 UPDATE discount
                 SET is_redeemed = 1, reedemedby = :cid
                 WHERE discount_code = :c AND is_redeemed = 0
-            """), {"c": int(code), "cid": cid})
+            """), {"c": int(dis_code), "cid": customer_id})
 
         return {
             "ok": True,
